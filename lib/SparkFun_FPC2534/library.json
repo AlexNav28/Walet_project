@@ -1,0 +1,8 @@
+{
+    "name": "SparkFun_FPC2534",
+    "version": "1.0.0",
+    "description": "SparkFun FPC2534 Fingerprint Sensor Library (UART)",
+    "keywords": "fingerprint, fpc2534, biometric, sensor, sparkfun",
+    "frameworks": "arduino",
+    "platforms": "espressif32"
+}
