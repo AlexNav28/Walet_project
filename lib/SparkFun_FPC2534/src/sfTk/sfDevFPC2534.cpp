@@ -408,10 +408,35 @@ fpc_result_t sfDevFPC2534::processNextResponse(bool flushNone)
     if (!_comm->dataAvailable())
         return FPC_RESULT_OK;
 
+    // --- NEW STRAT: Peek at the first byte before pulling a full header block ---
+    // A valid app frame MUST start with 0x04 (Little-endian 0x0004 version parameter)
+    // If the next byte in the stream isn't 0x04, it is guaranteed to be bootloader text or noise.
+    uint16_t discarded = 0;
+    const uint16_t kMaxSyncDiscard = 1024;
+
+    // We use Serial1.peek() directly to bypass any abstraction limitations
+    while (Serial1.available() > 0 && Serial1.peek() != 0x04 && discarded < kMaxSyncDiscard)
+    {
+        Serial1.read(); // Discard exactly 1 byte of verified ASCII bootloader garbage
+        discarded++;
+    }
+
+    if (discarded > 0)
+    {
+        Serial.printf("[SYNC SUCCESS]\tDropped %d bootloader/garbage bytes and aligned stream to 0x04.\n", discarded);
+    }
+
+    // Now check if we have enough bytes left to safely extract a full 8-byte header
+    if (Serial1.available() < sizeof(fpc_frame_hdr_t))
+    {
+        return FPC_RESULT_IO_NO_DATA; // Wait for the remaining header bytes to land
+    }
+
     fpc_frame_hdr_t frameHeader;
+    uint8_t *raw = (uint8_t *)&frameHeader;
 
     _comm->beginRead();
-    fpc_result_t rc = _comm->read((uint8_t *)&frameHeader, sizeof(fpc_frame_hdr_t));
+    fpc_result_t rc = _comm->read(raw, sizeof(fpc_frame_hdr_t));
 
     if (rc == FPC_RESULT_IO_NO_DATA)
     {
@@ -424,18 +449,43 @@ fpc_result_t sfDevFPC2534::processNextResponse(bool flushNone)
         return rc;
     }
 
-    if (frameHeader.version != FPC_FRAME_PROTOCOL_VERSION ||
-        ((frameHeader.flags & FPC_FRAME_FLAG_SENDER_FW_APP) == 0) ||
-        (frameHeader.type != FPC_FRAME_TYPE_CMD_RESPONSE && frameHeader.type != FPC_FRAME_TYPE_CMD_EVENT))
+    // Double-check structural header validation constraints
+    bool valid = (frameHeader.version == FPC_FRAME_PROTOCOL_VERSION) &&
+                 ((frameHeader.flags & FPC_FRAME_FLAG_SENDER_FW_APP) != 0) &&
+                 (frameHeader.type == FPC_FRAME_TYPE_CMD_RESPONSE ||
+                  frameHeader.type == FPC_FRAME_TYPE_CMD_EVENT) &&
+                 (frameHeader.payload_size <= MAX_HOST_PACKET_SIZE_DEFAULT);
+
+    if (!valid)
     {
+        // False alarm or corruption: clear just 1 byte to advance alignment on next execution loop
+        Serial1.read(); 
         _comm->endRead();
         return FPC_RESULT_IO_BAD_DATA;
     }
 
+    // --- Wait for the payload to finish arriving over UART ---
+    unsigned long payloadStartMs = millis();
+    const unsigned long kPayloadTimeoutMs = 1500; 
+    
+    while (Serial1.available() < frameHeader.payload_size)
+    {
+        if ((millis() - payloadStartMs) > kPayloadTimeoutMs)
+        {
+            Serial.printf("[ERROR]\tPayload timeout! Expected %d bytes, but only %d arrived in Serial1 buffer.\n", 
+                          frameHeader.payload_size, Serial1.available());
+            _comm->endRead();
+            return FPC_RESULT_IO_BAD_DATA;
+        }
+        delay(1); 
+    }
+
+    // Allocate and read the payload safely
     uint8_t framePayload[frameHeader.payload_size];
 
     rc = _comm->read(framePayload, frameHeader.payload_size);
     _comm->endRead();
+    
     if (rc != FPC_RESULT_OK)
         return rc;
 
@@ -447,6 +497,7 @@ fpc_result_t sfDevFPC2534::processNextResponse(bool flushNone)
 
     return parseCommand(framePayload, frameHeader.payload_size);
 }
+
 
 //--------------------------------------------------------------------------------------------
 fpc_result_t sfDevFPC2534::setLED(bool ledOn)

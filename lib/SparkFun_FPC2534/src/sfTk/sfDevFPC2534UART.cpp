@@ -18,6 +18,7 @@ sfDevFPC2534UART::sfDevFPC2534UART() : _theUART{nullptr}
 bool sfDevFPC2534UART::initialize(HardwareSerial &theUART)
 {
     _theUART = &theUART;
+    _theUART->setTimeout(10);
     return true;
 }
 
@@ -56,14 +57,14 @@ uint16_t sfDevFPC2534UART::read(uint8_t *data, size_t len)
     if (_theUART == nullptr)
         return FPC_RESULT_IO_RUNTIME_FAILURE;
 
-    size_t readBytes = _theUART->available();
-
-    if (readBytes == 0 || readBytes < len)
+    if (_theUART->available() == 0)
         return FPC_RESULT_IO_NO_DATA;
 
-    readBytes = _theUART->readBytes(data, len);
+    // Use readBytes with its built-in timeout (default 1000ms) to handle
+    // partial frames that arrive mid-transmission at high baud rates.
+    size_t readBytes = _theUART->readBytes(data, len);
 
-    if (readBytes == 0 && len > 0)
+    if (readBytes < len)
         return FPC_RESULT_IO_NO_DATA;
 
     return FPC_RESULT_OK;

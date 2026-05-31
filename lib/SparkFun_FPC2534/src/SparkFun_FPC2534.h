@@ -15,23 +15,15 @@
 #include "sfTk/sfDevFPC2534UART.h"
 #include <Arduino.h>
 
+#define SFE_FPC2534_I2C_ADDRESS kFPC2534DefaultAddress
 //--------------------------------------------------------------------------------------------
 // UART/Serial version of the FPC2534 class
-//
-// This is the class you instantiate in your sketch. It combines the core logic
-// (sfDevFPC2534) with the UART transport (sfDevFPC2534UART).
 //
 class SfeFPC2534UART : public sfDevFPC2534
 {
   public:
     SfeFPC2534UART() {}
 
-    /**
-     * @brief Initialize the sensor using UART communication
-     *
-     * @param theUART Reference to the HardwareSerial port connected to the sensor
-     * @return true if initialization was successful, false otherwise
-     */
     bool begin(HardwareSerial &theUART)
     {
         if (!_commUART.initialize(theUART))
