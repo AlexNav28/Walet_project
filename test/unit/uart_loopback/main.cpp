@@ -1,19 +1,27 @@
 /**
- * @file uart_loopback_test.cpp
- * @brief UART Loopback Test - Find working Serial1 pins
+ * @file    test/unit/uart_loopback/main.cpp
+ * @brief   Unit test: prove a Serial1 pin pair works before blaming the sensor.
  *
- * Connect SENSOR_TX_PIN to SENSOR_RX_PIN with a jumper wire (no sensor).
- * If the test prints "PASS", those pins work for Serial1.
- * Change the pin numbers until you find a working pair.
+ * Build and flash:
+ *     pio run -e test_uart_loopback -t upload -t monitor
+ *
+ * When the fingerprint sensor returned nothing, the suspects were the sensor,
+ * the ribbon, the ZIF connector and the ESP32 UART pin mapping. This sketch
+ * eliminates the last one: jumper TX to RX, send five bytes, check they come
+ * back. A PASS means the ESP32 side is fine and the fault is downstream, which
+ * is how the unpowered ZIF connector was found.
+ *
+ * Wiring: one jumper from SENSOR_TX_PIN to SENSOR_RX_PIN, no sensor connected.
+ * Change the pin defines and reflash to qualify another pair.
  */
 
 #include <Arduino.h>
 
 // ============================================================================
-// CHANGE THESE PINS until the test passes
+// The pins under test. Defaults are the ZIF connector's UART pins.
 // ============================================================================
-#define SENSOR_TX_PIN  1   // Try: 1, 10, 12, 13, 5, 6
-#define SENSOR_RX_PIN  2   // Try: 2, 9, 11, 14, 7, 8
+#define SENSOR_TX_PIN 17 // the board's fingerprint TX; change to qualify another pair
+#define SENSOR_RX_PIN 18 // the board's fingerprint RX
 
 void setup()
 {
@@ -36,7 +44,7 @@ void setup()
     // Start Serial1 on the test pins
     Serial1.setRxBufferSize(256);
     Serial1.begin(921600, SERIAL_8N1, SENSOR_RX_PIN, SENSOR_TX_PIN);
-    delay(100);
+    delay(1000);
 
     // Send 5 test bytes
     uint8_t testData[] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE};
