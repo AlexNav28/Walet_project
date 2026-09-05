@@ -39,7 +39,7 @@
 // Hardware Pin Configurations from your Custom PCB
 #define IMU_SDA         36
 #define IMU_SCL         37
-//#define SERVO_PIN       1   
+//#define SERVO_PIN     1  
 #define BUZZER_PIN      1   
 #define IRQ_PIN         16  
 #define UART_TX_PIN     17  
@@ -101,8 +101,8 @@ void setup() {
 
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW);
-  pinMode(SERVO_PIN, OUTPUT);
-  digitalWrite(SERVO_PIN, LOW);
+  //pinMode(SERVO_PIN, OUTPUT);
+  //digitalWrite(SERVO_PIN, LOW);
   pinMode(IRQ_PIN, INPUT);
 
   systemEvents = xEventGroupCreate();

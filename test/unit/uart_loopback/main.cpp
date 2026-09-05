@@ -44,7 +44,7 @@ void setup()
     // Start Serial1 on the test pins
     Serial1.setRxBufferSize(256);
     Serial1.begin(921600, SERIAL_8N1, SENSOR_RX_PIN, SENSOR_TX_PIN);
-    delay(1000);
+    delay(100);
 
     // Send 5 test bytes
     uint8_t testData[] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE};
