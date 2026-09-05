@@ -28,7 +28,8 @@
 // Custom BLE Commands
 #define BLE_CMD_ENROLL_START    0x01
 #define BLE_CMD_DELETE_ALL      0x02
-#define BLE_CMD_LIST_TEMPLATES  0x04
+#define BLE_CMD_LIST_TEMPLATES  0x03
+#define BLE_CMD_SERVO_OPENING  0x04
 
 // Hardware Pinout
 #define IMU_SDA         36
@@ -120,7 +121,7 @@ class ServerCallbacks : public BLEServerCallbacks {
     Serial.println("[BLE] Phone disconnected. Restarting advertising...");
     BLEDevice::getAdvertising()->start();
 
-    const char* msg = "⚠️ Wallet may be out of range — phone disconnected!";
+    const char* msg = " Wallet may be out of range — phone disconnected! ";
     xQueueSend(alertMessageQueue, &msg, 0);
   }
 };
@@ -206,6 +207,10 @@ void setup() {
   Serial.println("==================================================");
 
   ESP32PWM::allocateTimer(0);
+  ESP32PWM::allocateTimer(1);
+  ESP32PWM::allocateTimer(2);
+  ESP32PWM::allocateTimer(3);
+  
   pinMode(SERVO_PIN, OUTPUT);
   pinMode(IRQ_PIN, INPUT);
 
@@ -320,12 +325,17 @@ void writeIMURegister(byte reg, byte value) {
 void TaskSystemManager(void *pvParameters) {
   for (;;) {
     switch (currentState) {
-      case ST_LOCKED: {
-        EventBits_t bits = xEventGroupWaitBits(systemEvents, FLAG_FINGER_TOUCHED | FLAG_THEFT_DETECTED, 
+      case ST_LOCKED: {                                                                                 // LOCKED
+        EventBits_t bits = xEventGroupWaitBits(systemEvents, 
+                                               FLAG_FINGER_TOUCHED | FLAG_THEFT_DETECTED | FLAG_AUTH_PASSED, 
                                                pdTRUE, pdFALSE, portMAX_DELAY);
+
         if (bits & FLAG_THEFT_DETECTED) {
           currentState = ST_TAMPER_ALARM;
           Serial.println("[STATE] -> ST_TAMPER_ALARM");
+        } else if (bits & FLAG_AUTH_PASSED) {
+          currentState = ST_UNLOCKED;
+          Serial.println("[STATE] -> ST_UNLOCKED (BLE Manual Unlock)");
         } else if (bits & FLAG_FINGER_TOUCHED) {
           currentState = ST_AUTH_VERIFYING;
           Serial.println("[STATE] -> ST_AUTH_VERIFYING");
@@ -333,7 +343,7 @@ void TaskSystemManager(void *pvParameters) {
         break;
       }
 
-      case ST_AUTH_VERIFYING: {
+      case ST_AUTH_VERIFYING: {                                                                   // AUTH_VERIFYING
         EventBits_t bits = xEventGroupWaitBits(systemEvents, FLAG_AUTH_PASSED | FLAG_AUTH_FAILED, 
                                                pdTRUE, pdFALSE, pdMS_TO_TICKS(6000));
         if (bits & FLAG_AUTH_PASSED) {
@@ -348,7 +358,7 @@ void TaskSystemManager(void *pvParameters) {
         break;
       }
 
-      case ST_UNLOCKED: {
+      case ST_UNLOCKED: {                                                                       //UNLOCKED
         Serial.println("[SERVO] Unlocking latch...");
         walletServo.write(UNLOCKED_ANGLE);
         bleSetFlag(BLE_FLAG_CLEAR);
@@ -379,9 +389,9 @@ void TaskSystemManager(void *pvParameters) {
         break;
       }
 
-      case ST_TAMPER_ALARM: {
+      case ST_TAMPER_ALARM: {                                                             // TAMPER_ALARM
         Serial.println("[ALARM] Motion signature detected! Pushing alert...");
-        const char* theftMsg = "🚨 The wallet detected a high-g snatch motion signature!";
+        const char* theftMsg = " The wallet detected a high-g snatch motion signature! ";
         xQueueSend(alertMessageQueue, &theftMsg, 0);
 
         for (int i = 0; i < 10; i++) {
@@ -515,6 +525,12 @@ void TaskBiometricAuth(void *pvParameters) {
           while (Serial1.available()) { mySensor.processNextResponse(); }
 
           arm_identify_mode();
+          break;
+        }
+
+        case BLE_CMD_SERVO_OPENING: {
+          Serial.println("[BLE CMD] Manual servo unlock requested via BLE.");
+          xEventGroupSetBits(systemEvents, FLAG_AUTH_PASSED);
           break;
         }
 
