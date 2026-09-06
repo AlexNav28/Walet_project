@@ -49,6 +49,11 @@ const int UNLOCKED_ANGLE = 120;
 #define SERVO_TRAVEL_MS   800
 #define UNLOCK_TIMEOUT_MS 5000 // Automatically relocks after 5 seconds
 
+#define MAX_FAILED_ATTEMPTS      5
+#define FPC_LOCKOUT_DURATION_MS  15500  // 15 sec per datasheet + 500 ms margin
+volatile uint8_t failedAttemptCounter = 0;
+volatile uint32_t lockoutUntilMs = 0;
+
 // ============================================================================
 // FREERTOS OBJECTS & STATE MACHINE
 // ============================================================================
@@ -210,7 +215,6 @@ void setup() {
   ESP32PWM::allocateTimer(1);
   ESP32PWM::allocateTimer(2);
   ESP32PWM::allocateTimer(3);
-  
   pinMode(SERVO_PIN, OUTPUT);
   pinMode(IRQ_PIN, INPUT);
 
@@ -251,13 +255,25 @@ static void on_is_ready_change(bool isReady) {
 static void on_identify(bool is_match, uint16_t id) {
   if (is_match) {
     Serial.printf("[CALLBACK AUTH] Match verified! Template ID: %d\n", id);
+    failedAttemptCounter = 0;
+    lockoutUntilMs = 0;
     xEventGroupSetBits(systemEvents, FLAG_AUTH_PASSED);
     bleSetFlag(BLE_FLAG_CLEAR);
   } else {
-    Serial.println("[CALLBACK AUTH] No match found. Access Denied.");
+    failedAttemptCounter++;
+    Serial.printf("[CALLBACK AUTH] No match found. Denied (%u/%u)\n", 
+                  failedAttemptCounter, MAX_FAILED_ATTEMPTS);
+
     xEventGroupSetBits(systemEvents, FLAG_AUTH_FAILED);
     bleSetFlag(BLE_FLAG_WRONG_FINGER);
-    arm_identify_mode();
+
+    if (failedAttemptCounter >= MAX_FAILED_ATTEMPTS) {
+      lockoutUntilMs = millis() + FPC_LOCKOUT_DURATION_MS;
+      Serial.println("[SECURITY] 5 consecutive failures reached. FPC entering 15s hardware lockout.");
+
+      static const char* lockoutMsg = "Security Alert: 5 consecutive failed biometric attempts. Hardware locked out for 15s!";
+      xQueueSend(alertMessageQueue, &lockoutMsg, 0);
+    }
   }
 }
 
@@ -351,9 +367,20 @@ void TaskSystemManager(void *pvParameters) {
           Serial.println("[STATE] -> ST_UNLOCKED");
         } else {
           Serial.println("[STATE] -> Verification timed out or failed. Returning to LOCKED.");
-          vTaskDelay(pdMS_TO_TICKS(800));
+          vTaskDelay(pdMS_TO_TICKS(400));
           currentState = ST_LOCKED;
-          arm_identify_mode();
+
+          // Drain any trailing status bytes
+          while (Serial1.available()) {
+            mySensor.processNextResponse();
+          }
+
+          // Only re-arm if we are NOT in the 15-second hardware lockout
+          if (millis() >= lockoutUntilMs) {
+            arm_identify_mode();
+          } else {
+            Serial.println("[FPC] Re-arm suppressed: waiting for 15s hardware lockout to clear.");
+          }
         }
         break;
       }
@@ -543,6 +570,24 @@ void TaskBiometricAuth(void *pvParameters) {
     // 2. Continually stream incoming UART frames from sensor
     if (Serial1.available() > 0) {
       mySensor.processNextResponse();
+    }
+
+    // 3. Check if the 15-second hardware lockout has completed
+    if (lockoutUntilMs > 0 && millis() >= lockoutUntilMs) {
+      lockoutUntilMs = 0;
+      failedAttemptCounter = 0;
+      Serial.println("[SECURITY] 15s hardware lockout expired. Syncing and re-arming sensor...");
+
+      // Abort any residual state and drain UART before re-arming
+      mySensor.requestAbort();
+      vTaskDelay(pdMS_TO_TICKS(100));
+      while (Serial1.available()) {
+        mySensor.processNextResponse();
+      }
+
+      if (currentState == ST_LOCKED) {
+        arm_identify_mode();
+      }
     }
 
     vTaskDelay(pdMS_TO_TICKS(2));
