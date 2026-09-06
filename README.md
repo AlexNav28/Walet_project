@@ -1,31 +1,33 @@
 # Smart Wallet — Biometric Anti-Theft Card Holder
 
-**Custom ESP32-S3 PCB · FreeRTOS firmware · on-sensor fingerprint matching · IMU snatch detection · BLE control · WiFi alerts**
+**Custom ESP32-S3 PCB · FreeRTOS Firmware · On-Sensor Biometric Matching · IMU Snatch Detection · BLE Control · Out-of-Band WiFi Alerts**
 
-A card wallet that stays physically locked until it recognises its owner's
-fingerprint, watches its IMU for the motion signature of a snatch, uses the BLE
-link to the owner's phone as a proximity sensor, and pushes an alert over WiFi
-when the phone is out of range.
+A physical card wallet engineered to stay locked until it authenticates the owner's fingerprint. It continuously monitors an onboard IMU for the high-acceleration, high-rotation signature of a snatch theft, tracks proximity via BLE connection to the owner's phone, and fires an alert webhook over WiFi if triggered.
 
-Designed from scratch: state machine → schematic → four-layer PCB → soldering →
-bring-up → drivers → RTOS firmware.
-
-<p align="center">
-  <img src="docs/images/wallet-render.png" alt="Smart wallet render" width="300">
-  <img src="docs/images/pcb-3d-annotated.png" alt="Annotated PCB" width="440">
-</p>
+Designed and brought up from scratch: state machine planning → component selection → schematic design → 4-layer PCB layout → hand soldering → board bring-up & rework → driver unit tests → multi-threaded FreeRTOS firmware.
 
 ---
 
-## The problem
+## Overview
 
-RFID-blocking wallets stop card skimming but do nothing when the wallet is
-taken. Bluetooth trackers help you find a wallet after it is gone but do not
-prevent the theft or stop a thief opening it.
+Traditional RFID-blocking wallets only shield against wireless skimming; they offer zero physical defense if snatched off a table or pulled from a pocket. Bluetooth tags notify you long after the wallet is gone, but do not stop anyone from opening it immediately.
 
-This wallet covers the other half: the cards sit behind a servo latch that only
-an enrolled fingerprint retracts, so a stolen wallet is a locked box, and the
-alarm fires at the moment of the snatch.
+This project secures the physical access layer:
+* Cards are secured behind a micro-servo latch mechanism that only retracts upon an authenticated fingerprint match or an authenticated BLE override.
+* An onboard 6-DoF IMU continuously samples motion to detect snatch signatures in real time.
+* If a theft event occurs or the BLE link drops while armed, the wallet dispatches an alert over WiFi via an out-of-band Discord webhook.
+
+---
+
+## Hardware Specifications & Architecture
+
+| Category | Component / Choice | Design Rationale |
+|---|---|---|
+| **MCU** | ESP32-S3-MINI-1 | Dual-core processing to separate timing-critical tasks from radio stacks; built-in BLE 5.0 and 2.4 GHz Wi-Fi. |
+| **Fingerprint Module** | SparkFun FPC2534 (UART @ 921600)[cite: 1, 2] | On-sensor template storage and 1:N matching (`ID_TYPE_ALL`)[cite: 1]. Raw fingerprint image data never leaves the sensor module[cite: 1]. Chosen over SPI to minimize bus trace congestion and preserve MCU deep-sleep options[cite: 2]. |
+| **Motion Tracking** | LSM6DSO 6-DoF IMU (I2C)[cite: 2] | Continuous 104 Hz sampling. Used for threshold-based theft and snatch detection while keeping pin count low[cite: 2]. |
+| **Physical Latch** | Micro Servo (PWM via Core 1) | 180° locked / 120° retracted stroke. Automatically re-locks after a 5-second window. |
+| **PCB Layout** | 4-Layer Custom Board (KiCad)[cite: 2] | Designed with tight decoupling capacitor placement per manufacturer layout guidelines, minimized trace lengths between the MCU and sensors to drop high-frequency bus noise, and internal ground/power planes[cite: 2]. |
 
 ---
 
@@ -35,11 +37,11 @@ alarm fires at the moment of the snatch.
 |---|---|
 | **Physical lock** | Micro servo latch, 180° locked / 120° open, 800 ms travel, auto-relock after 5 s. |
 | **On-sensor matching** | FPC2534 armed in the background with `requestIdentify(ID_TYPE_ALL)` whenever locked. Templates and the match decision stay on the sensor — no fingerprint image crosses the UART or reaches the phone. |
-| **Snatch detection** | 6-DoF IMU at 104 Hz, polled every 10 ms. Theft is declared only when jerk > 0.75 g **and** rotation > 180 °/s in the same sample. Walking gives one, turning gives the other, a grab gives both. |
-| **Phone control** | Four BLE opcodes: multi-touch enrolment, wipe all templates, list the database, manual latch override. No on-device enrolment path. |
+| **Snatch detection** | LSM6DSO 6-DoF IMU at 104 Hz, polled every 10 ms. Theft is declared only when jerk > 0.75 g **and** rotation > 180 °/s in the same sample. Walking gives one, turning gives the other, a grab gives both. |
+| **Phone control** | Using nRF Connect app set up four BLE opcodes: multi-touch enrolment, wipe all templates, list the database, manual latch override. No on-device enrolment path. |
 | **Lockout handling** | Five failed scans put the FPC2534 into a 15 s internal lockout. The firmware mirrors it with a non-blocking deadline, suppresses re-arming, then aborts and resyncs. |
 | **Proximity** | A BLE disconnect means the wallet and its owner have separated. |
-| **Out-of-band alerts** | TLS webhook POST over WiFi on its own task, so a slow handshake never delays a lock. Fires on disconnect, tamper alarm, manual override and biometric lockout. |
+| **Out-of-band alerts** | Using Discord webhook POST over WiFi on its own task, so a slow handshake never delays a lock. Fires on disconnect, tamper alarm, manual override and biometric lockout. |
 
 ---
 
@@ -51,7 +53,6 @@ alarm fires at the moment of the snatch.
 | **[2. Hardware design](docs/02-hardware-design.md)** | Components, bus choices, PCB layout, power tree, pin map as built. |
 | **[3. Board bring-up](docs/03-board-bringup-and-debugging.md)** | The bring-up ladder and the three hardware faults this board shipped with. |
 | **[4. FPC2534 UART debugging](docs/04-fpc2534-uart-debugging.md)** | Error 33 — the bug that blocked the whole product. |
-| **[5. System integration debugging](docs/05-system-integration-debugging.md)** | The seven bugs that only exist between components, worst first. |
 | **[Test catalogue](test/README.md)** | The seven flashable test images and what each proves. |
 
 ---
@@ -104,6 +105,8 @@ service  4FAFC201-1FB5-459E-8FCC-C5C9C331914B   advertised as "SmartWallet"
   +-- COMMAND  beb5483e-...-26a9   WRITE           one opcode byte
 ```
 
+We use the app of nRF Connect by Nordic Semiconductor to test the funcionality of the commands
+
 | Command | | Status | |
 |---|---|---|---|
 | `0x01` | start multi-touch enrolment | `0x00` | clear |
@@ -120,7 +123,7 @@ phone side can be developed against a board with no sensors attached.
 ## Implementation process
 
 ```
-problem research -> state machine -> schematic -> 4-layer PCB -> fabrication
+problem research -> state machine -> schematic -> 2-layer PCB -> fabrication
    -> bring-up ladder (multimeter, then one unit test per peripheral)
    -> integration build under FreeRTOS, no radios
    -> full firmware with BLE + WiFi
@@ -189,33 +192,15 @@ before the firmware compiles. It needs three defines:
 #define DISCORD_WEBHOOK  "https://discord.com/api/webhooks/..."
 ```
 
-`platformio.ini` pins `espressif32 @ 7.0.1` — this project uses Arduino-ESP32
-core 2.x APIs removed in 3.x. The firmware environment uses the `huge_app`
-partition table, because BLE + WiFi + TLS overflows the default 1.4 MB app slot.
-Every environment compiles clean with `-Wall`.
-
 ---
 
-## Tech
-
-`ESP32-S3-MINI-1` · `FreeRTOS` · `C++` · `PlatformIO` · `Arduino-ESP32` ·
-`FPC2534` (UART @ 921600) · `LSM6DS` 6-DoF IMU (I2C) · `BLE GATT` ·
-`WiFi` + `mbedTLS` webhook · `KiCad` · 4-layer PCB · logic analyser ·
-oscilloscope · hand soldering and rework
-
----
-
-## My role
-
-Three-person team. My share of the work, end to end:
+### Personal Contributions
 
 - **Problem and parts research** — what existing anti-theft wallets do not
   solve, and components that fit an IoT form factor.
-- **State machine** — designed before the schematic.
-- **Prototyping** — breadboard bring-up of each part before committing copper.
-- **Schematic and PCB design** — KiCad, four layers.
-- **PCB soldering and debugging** — including the three rework fixes in
-  [docs/03](docs/03-board-bringup-and-debugging.md).
+- **Prototyping** — Testing sessors and funcionality with the constrains of the space
+- **Hardware Design & Layout:** — Formulated component constraints for ultra-compact IoT integration, drew schematics, and routed the 2-layer PCB in KiCad.
+- **PCB soldering and debugging** — Hand-soldered IC packages and passives, diagnosed routing defects with multimeters including the three rework fixes in [docs/03](docs/03-board-bringup-and-debugging.md).
 - **Firmware testing** — the unit test per driver, the integration build, and
   the bring-up ladder they sit at the top of.
 - **Firmware development** — the FreeRTOS architecture, the drivers, the state
@@ -224,9 +209,6 @@ Three-person team. My share of the work, end to end:
 - **System integration debugging** — the seven cross-component bugs in
   [docs/05](docs/05-system-integration-debugging.md), which is where most of the
   firmware time after "each driver works" went.
-
-The companion phone app and parts of the BLE/IoT integration were built by
-teammates; this repo is the wallet side of that link.
 
 **Team:** Alexis Navarrete · Aiden Krueger · Erictuan Nong
 **Course:** ECE 196, UC San Diego, Spring 2026
